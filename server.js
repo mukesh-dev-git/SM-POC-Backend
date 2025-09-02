@@ -3,6 +3,10 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const Reading = require('./models/reading');
+const Anomaly = require('./models/anomaly');
+const Forecast = require('./models/forecast');
+const { generateAnalyticsSummary } = require('./services/geminiService');
+
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -65,6 +69,51 @@ app.get('/data', async (req, res) => {
     }
 });
 
+app.get('/api/anomalies', async (req, res) => {
+    try {
+        const anomalies = await Anomaly.find().sort({ timestamp: -1 }).limit(50);
+        const readings = await Reading.find({
+            // Find regular readings around the time of the latest anomaly for context
+            receivedAt: { 
+                $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) // last 24 hours
+            }
+        }).sort({ receivedAt: 1 });
+        
+        res.status(200).json({ anomalies, contextReadings: readings });
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching anomalies' });
+    }
+});
+
+app.get('/api/forecast', async (req, res) => {
+    try {
+        const forecast = await Forecast.findOne().sort({ createdAt: -1 });
+        const recentReadings = await Reading.find({
+            receivedAt: {
+                $gte: new Date(Date.now() - 6 * 60 * 60 * 1000) // last 6 hours
+            }
+        }).sort({ receivedAt: 1 });
+
+        res.status(200).json({ forecast, recentReadings });
+    } catch (error) {
+        res.status(500).json({ message: 'Error fetching forecast' });
+    }
+});
+
+app.get('/api/summary', async (req, res) => {
+    try {
+        // Fetch the same data our other endpoints use
+        const anomalies = await Anomaly.find().sort({ timestamp: -1 }).limit(10);
+        const forecast = await Forecast.findOne().sort({ createdAt: -1 });
+
+        // Call our Gemini service
+        const summary = await generateAnalyticsSummary(anomalies, forecast);
+        
+        res.status(200).json({ summary });
+    } catch (error) {
+        res.status(500).json({ message: 'Error creating summary' });
+    }
+});
 
 // --- Start Server ---
 app.listen(PORT, () => {
